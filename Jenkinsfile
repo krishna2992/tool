@@ -12,7 +12,7 @@ pipeline {
         stage('Show Template Information') {
             steps {
                 sh '''
-                    python script.py \
+                    python3 script.py \
                         describe \
                         templates/workflow.yaml
                 '''
@@ -46,7 +46,7 @@ pipeline {
         stage('Deploy') {
             steps {
                 sh '''
-                    python script.py \
+                    python3 script.py \
                         deploy \
                         templates/workflow.yaml \
                         config.json
