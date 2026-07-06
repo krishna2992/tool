@@ -38,7 +38,7 @@ pipeline {
                 sh '''
                     echo "JSON file: $TEMPLATE_JSON"
 
-                    python3 deploy.py \
+                    python3 script.py \
                         --json "$TEMPLATE_JSON"
                 '''
             }
