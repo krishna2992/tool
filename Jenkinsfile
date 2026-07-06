@@ -37,7 +37,7 @@ pipeline {
             steps {
                 sh '''
                     echo "JSON file: $TEMPLATE_JSON"
-
+                    python3 -m pip install requests
                     python3 script.py \
                         --json "$TEMPLATE_JSON"
                 '''
