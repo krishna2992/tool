@@ -33,14 +33,13 @@ pipeline {
     }
 
     stages {
-        stage('Read JSON') {
+        stage('Run Python') {
             steps {
                 sh '''
-                    echo "Uploaded file path:"
-                    echo "$TEMPLATE_JSON"
+                    echo "JSON file: $TEMPLATE_JSON"
 
-                    echo "Contents:"
-                    cat "$TEMPLATE_JSON"
+                    python3 deploy.py \
+                        --json "$TEMPLATE_JSON"
                 '''
             }
         }
