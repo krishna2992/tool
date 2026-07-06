@@ -26,7 +26,7 @@ pipeline {
             description: 'Deployment environment'
         )
 
-        string(
+        file(
             name: 'TEMPLATE_JSON',
             description: 'JSON containing template variables'
         )
