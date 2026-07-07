@@ -32,6 +32,7 @@ variables:
   threshold: 1.5
   salesforceHost: https://orgfarm-8adaed7eaf-dev-ed.develop.my.salesforce.com
   firmId: 68708
+  hello: world
 
 inputs:
 - id: manager_id
@@ -80,7 +81,7 @@ tasks:
     uri: '{{envs.dv_apihost}}/api/firms/{{inputs.manager_id}}/profile'
     headers:
       Authorization: Bearer {{outputs.get_token.token}}
-      page-url: /app/home/game
+      page-url: /app/home/test
 
 
   - id: Get_Internal_Project_Template
