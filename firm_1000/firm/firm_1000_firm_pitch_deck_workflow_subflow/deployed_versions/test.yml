@@ -1,0 +1,810 @@
+id: 1000_pitch_deck_workflow_subflow
+namespace: firm_64899.firm
+description: |-
+  {"createdAt": "2026-07-07T07:06:27.168020Z", "updatedAt": "2026-07-07T07:06:27.168020Z", "description": "Automatically evaluates pitch decks to assess opportunities. If the opportunity crosses the predefined threshold, an external project is triggered and sent to the manager for further review and action."}
+
+errors:
+- id: send_slack_message_tofirm
+  type: io.kestra.plugin.slack.notifications.SlackIncomingWebhook
+    # Slack Webhook Url
+  url: "{{kv('SLACK_WEBHOOK_URL', namespace='dv.global')}}"
+  messageText: |
+    Execution failed
+    ExecutionID: {{execution.id}}
+    Workflow ID: {{flow.id}}
+    Workflow Namespace: {{flow.namespace}}
+    Workflow Name: Pitch Deck Assessment
+
+labels:
+  dv_triggerType: Pitch Deck Submitted
+  dv_name: Pitch Deck Assessment
+  dv_trigger: Manual
+  category: Pitch Deck Review
+
+variables:
+  username: krishna.suryawanshi@diligencevault.com
+  templateId: '8183'
+  notificationContact: '10001'
+  threshold: '1.5'
+  salesforceHost: https://orgfarm-8adaed7eaf-dev-ed.develop.my.salesforce.com
+  firmId: '64899'
+
+inputs:
+- id: manager_id
+  type: INT
+  required: true
+
+- id: template_id
+  type: INT
+  required: true
+
+- id: file_ids
+  type: ARRAY
+  itemType: INT
+  required: true
+
+
+
+pluginDefaults:
+- type: com.diligencevault.plugin.core.tasks
+  values:
+    retry:
+      type: constant
+      maxAttempts: 3
+      interval: PT30S
+
+- type: io.kestra.plugin.core.http
+  values:
+    retry:
+      type: constant
+      maxAttempts: 3
+      interval: PT30S
+
+
+tasks:
+- id: get_token
+  type: com.diligencevault.plugin.core.tasks.GetToken
+  email: '{{vars.username}}'
+
+- id: Start_Internal_Duediligence
+  type: io.kestra.plugin.core.flow.Sequential
+  description: |
+    Internal project is created using the Initial manager screening template
+  tasks:
+  - id: Get_Manager_Firm_Details
+    type: io.kestra.plugin.core.http.Request
+    uri: '{{envs.dv_apihost}}/api/firms/{{inputs.manager_id}}/profile'
+    headers:
+      Authorization: Bearer {{outputs.get_token.token}}
+      page-url: /app/home
+
+
+  - id: Get_Internal_Project_Template
+    type: io.kestra.plugin.core.http.Request
+    uri: '{{envs.dv_apihost}}/api/templates/{{inputs.template_id}}'
+    headers:
+      Authorization: Bearer {{outputs.get_token.token}}
+      page-url: /app/home
+
+  - id: dv_entity_value
+    type: io.kestra.plugin.core.execution.Labels
+    labels:
+      entity_value: "{{ outputs.Get_Manager_Firm_Details.body| jq('.name')|first }}"
+
+  - id: Create_New_Internal_Project_Internal
+    type: com.diligencevault.plugin.core.tasks.NewDiligenceRequest
+    token: '{{outputs.get_token.token}}'
+    name: '{{outputs.Get_Internal_Project_Template.body|jq(".templateInfo.name")|first
+      }}-{{outputs.Get_Manager_Firm_Details.body| jq(".name")|first}}'
+    allow_project_name_access: false
+    is_approval_required: false
+    internal: true
+    entity_notification_contacts:
+    - '{{vars.notificationContact}}'
+    as_of_date: '{{now(timeZone="Asia/Kolkata")}}'
+    entityType: Firm
+    entityId: '{{inputs.manager_id}}'
+    templateId: '{{inputs.template_id}}'
+    due_at: '{{now(timeZone="Asia/Kolkata")| dateAdd(10, "DAYS")}}'
+
+
+- id: Start_Internal_Duediligence_ui
+  type: io.kestra.plugin.core.output.OutputValues
+  values:
+    ui_outputs:
+      Project: '{{outputs.Get_Internal_Project_Template.body|jq(".templateInfo.name")|first
+        }}-{{outputs.Get_Manager_Firm_Details.body| jq(".name")|first}}'
+      Template: '{{outputs.Get_Internal_Project_Template.body|jq(".templateInfo.name")|first
+        }}'
+      Manager: '{{outputs.Get_Manager_Firm_Details.body| jq(".name")|first}}'
+
+
+  
+- id: Data_Extraction_And_Evaluation
+  type: io.kestra.plugin.core.flow.Sequential
+  description: |
+    Responses are auto-filled using the annual investor presentation document
+  tasks:
+  - id: Attach_Document_to_Project
+    type: io.kestra.plugin.scripts.python.Script
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    dependencies:
+    - kestra
+    - requests
+    script: |
+      import requests as r
+      from kestra import Kestra
+
+      headers = {
+        'Authorization': 'Bearer {{outputs.get_token.token}}',
+        'page-url': '/app/home'
+      }
+
+      data = {
+        "Entity_ids": [
+            {{outputs.Create_New_Internal_Project_Internal.id}}
+        ],
+        "entity_type": "DueDiligence",
+        "newassigned": {{inputs.file_ids}},
+        "unassigned": []
+      }
+
+      res = r.post('{{envs.dv_apihost}}/api/AttachmentAssignments/bulk_assignment_v2',
+                  headers=headers,
+                  json=data)
+
+      Kestra.outputs({'status_code':res.status_code, 'body':res.text})
+
+  - id: Start_Autofill
+    type: io.kestra.plugin.core.http.Request
+    uri: '{{envs.dv_apihost}}/api/service/es_service/document_autofill'
+    method: POST
+    contentType: application/json
+    headers:
+      Authorization: Bearer {{outputs.get_token.token}}
+      page-url: /app/home
+    body: |
+      {
+        "duediligence_id": {{outputs.Create_New_Internal_Project_Internal.id}},
+        "source_tab": "AI Mode",
+        "document_ids": {{inputs.file_ids}},
+        "is_drafts_enabled": false,
+        "is_AE": false
+      }
+
+  - id: wait_for_autofill
+    type: io.kestra.plugin.core.flow.LoopUntil
+    condition: "{{ outputs.check_autofill_status.body == '{}' }}"
+    tasks:
+    - id: sleep
+      type: io.kestra.plugin.core.flow.Pause
+      pauseDuration: PT1M
+
+    - id: get_token_for_checking
+      type: com.diligencevault.plugin.core.tasks.GetToken
+
+
+
+    - id: check_autofill_status
+      type: io.kestra.plugin.core.http.Request
+      uri: '{{envs.dv_servicehost}}/es_service/document_autofill_progress?duediligence_id={{outputs.Create_New_Internal_Project_Internal.id}}'
+      headers:
+        Authorization: Bearer {{outputs.get_token_for_checking.jwt}}
+
+  - id: get_token2
+    type: com.diligencevault.plugin.core.tasks.GetToken
+    email: '{{vars.username}}'
+
+
+  - id: mark_project_completed
+    type: com.diligencevault.plugin.core.tasks.SetProjectStatus
+    projectId: '{{outputs.Create_New_Internal_Project_Internal.id}}'
+    status: completed
+    token: '{{outputs.get_token.token}}'
+
+  - id: wait_for_auto_scoring
+    type: io.kestra.plugin.core.flow.Pause
+    pauseDuration: PT1M
+
+
+  - id: Get_Project_Details
+    type: io.kestra.plugin.core.http.Request
+    uri: '{{envs.dv_apihost}}/api/diligences/{{outputs.Create_New_Internal_Project_Internal.id}}'
+    headers:
+      Authorization: Bearer {{outputs.get_token2.token}}
+      page-url: /app/home
+
+- id: Data_Extraction_And_Evaluation_ui
+  type: io.kestra.plugin.core.output.OutputValues
+  values:
+    displayname: Data Extraction And Evaluation
+
+
+
+- id: Evaluate_Responses_If
+  type: io.kestra.plugin.core.flow.If
+  description: |
+    Evaluates responses using predefined rules
+  condition: '{{outputs.Get_Project_Details.body| jq(".total_score") |first < vars.threshold  }}'
+  then:
+  - id: Reject
+    type: com.diligencevault.plugin.core.tasks.SetProjectStatus
+    description: |
+      Reject pitch  deck proposal 
+    projectId: '{{outputs.Create_New_Internal_Project_Internal.id}}'
+    status: notapproved
+    token: '{{outputs.get_token2.token}}'
+
+  - id: Reject_ui
+    type: io.kestra.plugin.core.output.OutputValues
+    values:
+      contextText: |
+        Evaluation outcome for pitch deck is {{outputs.Get_Project_Details.body| jq(".total_score") |first}}. Score is less than threshold {{vars.threshold}}, rejected pitch deck proposal
+      displayname: Reject Proposal
+      ui_outputs:
+        Score: '{{outputs.Get_Project_Details.body| jq(".total_score") |first}}'
+        Status: NotApproved
+        Threshold: '{{vars.threshold}}'
+
+
+  - id: Complete_Duediligence_Process
+    type: io.kestra.plugin.core.execution.Exit
+
+
+- id: Assign_Approval_Task
+  description: |
+    Assign approval task to Sarah Jones to review pitch deck evaluation
+  type: io.kestra.plugin.core.flow.Sequential
+  tasks:
+  - id: get_autofill_count
+    type: io.kestra.plugin.core.http.Request
+    uri: '{{envs.dv_apihost}}/api/diligences/{{outputs.Create_New_Internal_Project_Internal.id}}/QuestionCounts'
+    headers:
+      Authorization: Bearer {{outputs.get_token2.token}}
+      page-url: /app/home
+
+  - id: create_form
+    type: io.kestra.plugin.core.http.Request
+    method: POST
+    uri: '{{envs.dv_apihost}}/api/service/dvapi_service/forms'
+    contentType: application/json
+    headers:
+      page-url: /app/home
+      Authorization: Bearer {{outputs.get_token2.token}}
+    body: |
+      {
+          "form": {
+            "title": "User Approval Form",
+            "assigned_user_id" : {{vars.notificationContact}},
+            "execution_id": "{{execution.id}}",
+            "assigned_function_id": null,
+            "due_date": "{{now()|dateAdd(3, 'DAYS')}}",
+            "input_schema": [
+              {
+                  "id": "total",
+                  "type": "NUMBER",
+                  "text": "Total number of questions autofilled",
+                  "max": {{json(outputs.get_autofill_count.body)[60].value??0+1}},
+                  "min": 0,
+                  "default": {{json(outputs.get_autofill_count.body)[60].value??0}},
+                  "required": true
+              },
+              {
+                  "id": "confident",
+                  "type": "NUMBER",
+                  "text": "Number of questions autofilled with high confidence",
+                  "max": {{json(outputs.get_autofill_count.body)[60].value??0+1}},
+                  "min": 0,
+                  "default": {{json(outputs.get_autofill_count.body)[61].value??0}},
+                  "required": true
+              },
+              {
+                  "id": "limited",
+                  "type": "NUMBER",
+                  "text": "Number of questions autofilled with limited confidence",
+                  "max": {{json(outputs.get_autofill_count.body)[60].value??0+1}},
+                  "min": 0,
+                  "default": {{json(outputs.get_autofill_count.body)[62].value??0}},
+                  "required": true 
+              },
+              {
+                  "id": "projectUrl",
+                  "type": "TEXT",
+                  "text": "Project url",
+                  "default": "https://dv-feature-angular.azurewebsites.net/#/app/diligence/projects/{{outputs.Create_New_Internal_Project_Internal.id}}/questionnaire",
+                  "required": true,
+                  "multiple": false
+              },
+              {
+                  "id": "Approval",
+                  "type": "SELECT",
+                  "options" : ["APPROVED", "REJECTED"],
+                  "text": "Approval status for project",
+                  "default": "REJECTED",
+                  "required": true,
+                  "multiple": false
+              },
+              {
+                  "id": "Remark",
+                  "type": "TEXT",
+                  "text": "Add your remark on your decision",
+                  "default": "",
+                  "required": true,
+                  "multiple": false
+              }
+            ]
+          }
+        }
+
+  - id: suscribe_form_submission
+    type: io.kestra.plugin.core.http.Request
+    method: POST
+    headers:
+      page-url: /app/home
+      Authorization: Bearer {{outputs.get_token2.token}}
+    uri: '{{envs.dv_apihost}}/api/service/dvapi_service/subscriptions'
+    contentType: application/json
+    body: |
+      {
+          "subscriptions": {
+            "execution_id": "{{execution.id}}",
+            "expression": " $form_submission.status == 'completed' ",
+            "due_date": "{{now()|dateAdd(3, 'DAYS')}}",
+            "subscriptions": [
+            {
+                "entity_type": 9000,
+                "entity_id": {{outputs.create_form.body| jq('.id')|first}},
+                "entity_event": "form.status.updated",
+                "expression": " event.after.status == 'submitted' ",
+                "alias": "form_submission",
+                "due_date": "{{now()|dateAdd(3, 'DAYS')}}"
+            } 
+          ]
+        }
+      }
+
+- id: Assign_Approval_Task_ui
+  type: io.kestra.plugin.core.output.OutputValues
+  values:
+    contextText: |
+      Assigned a form task to Sarah Jones for reviewing pitch deck evaluation
+    displayname: Assign Approval Task
+    ui_outputs:
+      Assigned To: Sarah Jones
+      Assigned On: '{{now()|date("MMMM d, yyyy")}}'
+      Due At: '{{now()|dateAdd(3, "DAYS")|date("MMMM d, yyyy")}}'
+
+
+
+- id: Waiting_for_Approval
+  type: io.kestra.plugin.core.flow.Pause
+  description: |
+    Wait For Manual User Approval
+  onResume:
+  - id: dv_subscription_group_id
+    type: INT
+    defaults: '{{outputs.suscribe_form_submission.body|jq(".id")|first}}'
+
+  - id: event
+    type: JSON
+    required: true
+
+- id: Waiting_for_Approval_ui
+  type: io.kestra.plugin.core.output.OutputValues
+  values:
+    contextText: |
+      {% if outputs.Waiting_for_Approval.onResume.event.form_submission.extras.form.completed_data.Approval == "REJECTED"  %}
+        Sarah Jones has reviewed pitch deck proposal and rejected opportunity
+      {% else %}
+        Sarah Jones has reviewed pitch deck proposal and accepted opportunity
+      {% endif %} 
+    displayname: Wait For Approval
+    ui_outputs:
+      Assigned To: Sarah Jones
+      Submitted On: '{{now()|date("MMMM d, yyyy")}}'
+      Approval Status: '{{outputs.Waiting_for_Approval.onResume.event.form_submission.extras.form.completed_data.Approval}}'
+
+
+- id: get_token3
+  type: com.diligencevault.plugin.core.tasks.GetToken
+  email: '{{vars.username}}'
+
+
+- id: Check_User_Approval
+  type: io.kestra.plugin.core.flow.If
+  condition: '{{outputs.Waiting_for_Approval.onResume.event.form_submission.extras.form.completed_data.Approval
+    == "REJECTED"}}'
+  then:
+  - id: Reject_Pitch_Deck
+    type: com.diligencevault.plugin.core.tasks.SetProjectStatus
+    description: |
+      Reject Proposal and Halt Duediligence Process
+    projectId: '{{outputs.create_new_project.id}}'
+    status: notapproved
+    token: '{{outputs.get_token3.token}}'
+
+  - id: Reject_Pitch_Deck_ui
+    type: io.kestra.plugin.core.output.OutputValues
+    values:
+      contextText: |
+        Analyst rejected proposal.   
+      displayname: Reject
+      ui_outputs:
+        Manager: '{{outputs.Get_Manager_Firm_Details.body| jq(".name")|first}}'
+        Template: '{{outputs.Get_Internal_Project_Template.body|jq(".templateInfo.name")|first
+          }}'
+        Status: NotApproved
+        Remark: '{{outputs.Waiting_for_Approval.onResume.event.form_submission.extras.form.completed_data.Remark}}'
+        Score: '{{outputs.Get_Project_Details.body| jq(".total_score") |first}}'
+
+
+
+  - id: Complete_Duediligence_Process_Manual
+    type: io.kestra.plugin.core.execution.Exit
+    description: |
+      Evalution and Analysis for this proposal is rejected and due diligence process is completed
+
+
+- id: Approve_Pitch
+  type: com.diligencevault.plugin.core.tasks.SetProjectStatus
+  description: |
+    Approves due diligence proposal
+  projectId: '{{outputs.Create_New_Internal_Project_Internal.id}}'
+  status: approved
+  token: '{{outputs.get_token3.token}}'
+
+- id: Approve_Pitch_ui
+  type: io.kestra.plugin.core.output.OutputValues
+  values:
+    contextText: |
+      Approved pitch after evaluation and user approvals   
+    displayname: Approve Pitch
+    ui_outputs:
+      Manager: '{{outputs.Get_Manager_Firm_Details.body| jq(".name")|first}}'
+      Template: '{{outputs.Get_Internal_Project_Template.body|jq(".templateInfo.name")|first
+        }}'
+      Status: Approved
+      Remark: '{{outputs.Waiting_for_Approval.onResume.event.form_submission.extras.form.completed_data.Remark}}'
+      Score: '{{outputs.Get_Project_Details.body| jq(".total_score") |first}}'
+
+
+  # Allow this step to fail so that manager will auto receive ddq even if step fails
+- id: Generate_Presentation_Report
+  type: io.kestra.plugin.core.flow.AllowFailure
+  description: |
+    Generates a presentation report using the “Screening” template design
+  tasks:
+  - id: Generate_Presentation_Report_Internal
+    type: io.kestra.plugin.core.http.Request
+    contentType: application/json
+    method: POST
+    headers:
+      Authorization: Bearer {{outputs.get_token3.token}}
+      page-url: /app/home
+    uri: '{{envs.dv_apihost}}/api/reports/new/generate'
+    body: |
+      {
+        "document_id": 295,
+        "name": "Initial Manager Screening",
+        "as_of_date": "{{now() | date('MM-dd-YYYY')}}",
+        "diligence_ids": [
+          {{outputs.Create_New_Internal_Project_Internal.id}}
+        ],
+        "save_report": true
+      }
+
+  - id: Email_Presentation_Report
+    type: io.kestra.plugin.core.http.Request
+    uri: '{{envs.dv_apihost}}/api/reports/new/{{json(outputs.Generate_Presentation_Report_Internal.body).id}}/email'
+    headers:
+      Authorization: Bearer {{outputs.get_token3.token}}
+      page-url: /app/home
+
+- id: Request_Addtional_Data
+  type: io.kestra.plugin.core.flow.Sequential
+  tasks:
+  - id: Get_External_Project_Template
+    type: io.kestra.plugin.core.http.Request
+    uri: '{{envs.dv_apihost}}/api/templates/{{vars.templateId}}'
+    headers:
+      Authorization: Bearer {{outputs.get_token3.token}}
+      page-url: /app/home
+
+  - id: Send_External_Ddq
+    type: com.diligencevault.plugin.core.tasks.NewDiligenceRequest
+    description: |
+      Primary manager evaluation is succesful. Move to next stage and request additional data from manager
+    token: '{{outputs.get_token3.token}}'
+    name: '{{outputs.Get_Internal_Project_Template.body|jq(".templateInfo.name")|first
+      }}-{{outputs.Get_Manager_Firm_Details.body| jq(".name")|first}}'
+    allow_project_name_access: false
+    is_approval_required: false
+    internal: false
+    entity_notification_contacts:
+    - '{{vars.notificationContact}}'
+    as_of_date: '{{now(timeZone="Asia/Kolkata")}}'
+    entityType: Firm
+    entityId: '{{inputs.manager_id}}'
+    templateId: '{{vars.templateId}}'
+    due_at: '{{now(timeZone="Asia/Kolkata")| dateAdd(10, "DAYS")}}'
+
+      
+
+    
+
+- id: Request_Addtional_Data_ui
+  type: io.kestra.plugin.core.output.OutputValues
+  values:
+    contextText: |
+      An external DDQ was sent to {{outputs.Get_Manager_Firm_Details.body| jq(".name")|first}} manager with {{outputs.Get_External_Project_Template.body|jq(".templateInfo.name")|first }} template for further evaluation
+    displayname: Request Additional Data
+    ui_outputs:
+      Template: '{{outputs.Get_External_Project_Template.body|jq(".templateInfo.name")|first
+        }}'
+      Manager: '{{outputs.Get_Manager_Firm_Details.body| jq(".name")|first}}'
+      Due At: '{{now(timeZone="Asia/Kolkata")| dateAdd(10, "DAYS")|date("MMMM d, yyyy")}}'
+
+        
+  
+
+
+- id: Update_Relationship_Status
+  description: |
+    Updates the relationship status for manager in both DiligenceVault and Salesforce CRM
+  type: io.kestra.plugin.core.flow.Sequential
+  tasks:
+  - id: Get_External_Project_Details
+    type: io.kestra.plugin.core.http.Request
+    uri: '{{envs.dv_apihost}}/api/diligences/{{outputs.Send_External_Ddq.id}}'
+    headers:
+      Authorization: Bearer {{outputs.get_token3.token}}
+      page-url: /app/home
+
+  - id: Update_Firm_Relationship_Status_to_Under_Review
+    type: io.kestra.plugin.scripts.python.Script
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    script: |
+      from kestra import Kestra 
+      import requests as r
+      import json
+      import sys
+      logger = Kestra.logger()
+
+      firm_id = {{inputs.manager_id}}
+
+      tag_value = 'Under Review'
+      tag_id = -1
+      headers = {
+        'Authorization': "Bearer {{outputs.get_token3.token}}",
+        'page-url': '/app/home'
+
+      }
+      tags = r.get('{{envs.dv_apihost}}/api/tags?type=Status', headers=headers)
+      if tags.status_code!=200:
+        raise Exception('Failed to fetch status')
+
+      tags = tags.json()
+
+      for tag in tags:
+        if tag['name'].lower() == tag_value.lower():
+            tag_id = tag['id']
+
+      data = {
+          "relationship_status_id": tag_id
+        }
+
+      res = r.put(f'{{envs.dv_apihost}}/api/firms/{firm_id}', headers=headers, json=data)
+      if res.status_code!=202:
+        raise Exception(f'Failed to update relationship status: {res.content}')
+
+      logger.info('Relationship Status Updated Succesfully')
+
+  - id: Get_Salesforce_Credentials_Second
+    type: io.kestra.plugin.core.kv.Get
+    key: SALES_FORCE_CLIENT_CREDS
+    namespace: firm_{{vars.firmId}}.firm
+
+  - id: Get_Salesforce_Access_Token_Second
+    type: io.kestra.plugin.scripts.python.Script
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    dependencies:
+    - requests
+    - kestra
+    script: |
+      import requests
+      from kestra import Kestra
+      import json
+      data = json.loads(r'''{{outputs.Get_Salesforce_Credentials_Second.value}}''')
+      res = requests.post("{{vars.salesforceHost}}/services/oauth2/token", data=data)
+      res.raise_for_status()
+      data = res.json()
+      access_token = data['access_token']
+      def get_api_key():
+        url = '{{envs.dv_apihost}}/api/api_keys'
+        headers = {
+          'Authorization': 'Bearer {{outputs.get_token3.token}}',
+          'page-url': '/app/home'
+        }
+        res = requests.get(url, headers=headers)
+        return res.text[1:-1]
+
+      def get_public_token(api_key):
+        API_URL = '{{envs.dv_servicehost}}/publicapi_service/api/v2/get-token/'
+        headers = {
+          "x-api-key": api_key
+        }
+        res = requests.get(API_URL, headers=headers).json()
+        token = res['access_token']
+        return token
+
+      def source_id_from_firm(firm_id):
+        api_key = get_api_key()
+        public_token = get_public_token(api_key) 
+        headers = {
+          'x-api-key' : api_key,
+          'Authorization': f'Bearer {public_token}'
+        }
+        url = '{{envs.dv_servicehost}}/publicapi_service/api/v2/firms/migration/source_id'
+        params= {"source_type": 2,  "firm_id": firm_id}
+        res = requests.get(url, params=params, headers=headers)
+        res.raise_for_status()
+        return res.json()['source_id']
+
+      source_id = source_id_from_firm({{inputs.manager_id}})
+      Kestra.logger().info(f"Source ID: {source_id}")
+
+      Kestra.outputs({"access_token":access_token, "source_id": source_id})
+
+  - id: Update_the_firm_Relationship_Status_in_Salesforce_to_Under_Review
+    type: io.kestra.plugin.core.http.Request
+    uri: '{{vars.salesforceHost}}/services/data/v60.0/sobjects/Account/{{outputs.Get_Salesforce_Access_Token_Second.vars.source_id}}'
+    method: PATCH
+    headers:
+      Authorization: Bearer 
+        {{outputs.Get_Salesforce_Access_Token_Second.vars.access_token}}
+    contentType: application/json
+    body: |
+      {
+        "relationship_status__c": "Under Review"
+      }
+
+  - id: get_document_url
+    type: io.kestra.plugin.core.http.Request
+    method: GET
+    uri: '{{envs.dv_apihost}}/api/attachments/{{inputs.file_ids[0]}}/signed_url'
+    headers:
+      Authorization: Bearer {{outputs.get_token3.token}}
+      page-url: /app/home
+
+
+  - id: Upload_Pitch_Deck_to_Salesforce_CRM
+    type: io.kestra.plugin.scripts.python.Script
+    allowFailure: true
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    dependencies:
+    - requests
+    - kestra
+    script: |
+      import requests
+      from kestra import Kestra
+      from urllib.parse import urlparse, unquote
+      import json
+      import base64
+
+      INSTANCE_URL = "{{vars.salesforceHost}}"
+      RECORD_ID = "{{outputs.Get_Salesforce_Access_Token_Second.vars.source_id}}"  
+      FILE_URL = {{outputs.get_document_url.body}}
+
+      logger = Kestra.logger()
+
+      access_token = '{{outputs.Get_Salesforce_Access_Token_Second.vars.access_token}}'
+      url = f"{INSTANCE_URL}/services/data/v60.0/sobjects/ContentVersion"
+
+      headers = {
+        "Authorization": f"Bearer {access_token}"
+      }
+
+      def upload_file_from_url(file_url):
+        with requests.get(file_url, stream=True) as r:
+          r.raise_for_status()
+          filename = unquote(urlparse(file_url).path.split("/")[-1]) or "downloaded_file"
+          sf_url = f"{INSTANCE_URL}/services/data/v60.0/sobjects/ContentVersion"
+          
+          headers = {
+            "Authorization": f"Bearer {access_token}"
+          }
+          
+          entity_content = '{"Title": "' + filename + '", "PathOnClient": "' + filename + '", "FirstPublishLocationId": "' + RECORD_ID + '"}'
+          files = {
+              'entity_content': (None, entity_content, 'application/json'),
+              'VersionData': (filename, r.raw, r.headers.get('Content-Type', 'application/octet-stream'))
+          }
+
+          response = requests.post(sf_url, headers=headers, files=files)
+          if response.status_code != 201:
+              logger.error('Failed to upload file')
+          logger.debug(response.content)
+
+
+      upload_file_from_url(FILE_URL)
+
+  # Update_Relationship_Status
+- id: Update_Relationship_Status_ui
+  type: io.kestra.plugin.core.output.OutputValues
+  values:
+    contextText: |
+      Manager has moved to next stage change manager status in DV and Salesforce for furthur tracking and pitch deck is uploaded to Salesforce DataVault
+    displayname: Update Relationship Status
+    ui_outputs:
+      Manager: '{{outputs.Get_Manager_Firm_Details.body| jq(".name")|first}}'
+      DV Status: Under Review
+      Salesforce Status: Under Review
+
+
+- id: Send_Notification_On_Teams
+  type: io.kestra.plugin.microsoft365.teams.TeamsIncomingWebhook
+  description: |
+    Send a microsoft teams notification regarding the external project sent to the manager
+  url: "{{ kv('TEAMS_WEBHOOK_SECRET', namespace='firm_'~vars.firmId~'.firm') }}"
+  payload: |
+    {
+      "type": "message",
+      "attachments": [
+        {
+          "contentType": "application/vnd.microsoft.card.adaptive",
+          "content": {
+            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+            "type": "AdaptiveCard",
+            "version": "1.4",
+            "body": [
+            {
+              "type": "TextBlock",
+              "text": "New Project Request Sent to {{outputs.Get_Manager_Firm_Details.body| jq('.name')|first }}",
+              "weight": "Bolder",
+              "size": "Medium"
+            },
+            {
+              "type": "TextBlock",
+              "text": "The pitch deck project, [{{outputs.Get_Internal_Project_Template.body|jq(".templateInfo.name")|first }}-{{outputs.Get_Manager_Firm_Details.body| jq(".name")|first}}], has been approved, and a new project request has been sent to the manager. Please track the progress and ensure the next steps are completed promptly.",
+              "wrap": true,
+              "color": "Attention"
+            },
+            {
+              "type": "FactSet",
+              "facts": [
+              {
+                "title": "Project Name: ",
+                "value": "{{outputs.Get_External_Project_Details.body|jq('.name')|first}}"
+              },
+              {
+                "title": "Entity Name: ",
+                "value": "{{ outputs.Get_Manager_Firm_Details.body| jq('.name')|first }}"
+              },
+              {
+                "title": "Due Date: ",
+                "value": "{{ now(timeZone="Asia/Kolkata")| dateAdd(10, "DAYS")|date('MM-dd-YYYY')}}"
+              },
+              {
+                "title": "Template Name:",
+                "value": "{{outputs.Get_External_Project_Template.body|jq(".templateInfo.name")|first }}(ILPA)"
+              }
+              ]
+            }]              
+          }
+    	  }]
+    }
+
+- id: Send_Notification_On_Teams_ui
+  type: io.kestra.plugin.core.output.OutputValues
+  values:
+    contextText: |
+      A teams notification was sent notifying your team about manager tracking details
+    ui_outputs:
+      Manager: '{{outputs.Get_Manager_Firm_Details.body| jq(".name")|first}}'
+      Relationship Status: Under Review
+      Due At: '{{now(timeZone="Asia/Kolkata")| dateAdd(10, "DAYS")|date("MMMM d, yyyy")}}'
+disabled: true
