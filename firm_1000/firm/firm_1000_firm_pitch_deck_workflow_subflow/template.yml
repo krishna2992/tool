@@ -30,8 +30,9 @@ variables:
   notificationContact: 96359
   threshold: 1.5
   salesforceHost: https://orgfarm-8adaed7eaf-dev-ed.develop.my.salesforce.com
-  firmId: 68708
   hello: world
+  firmId: 68708
+
 
 inputs:
 - id: manager_id
@@ -73,7 +74,7 @@ tasks:
 - id: Start_Internal_Duediligence
   type: io.kestra.plugin.core.flow.Sequential
   description: |
-    Internal project is created using the Initial manager screening template
+    Internal project is created using the Initial manager screening template and used for manager ai evaluation. Responses are auto-filled using the annual investor presentation document
   tasks:
   - id: Get_Manager_Firm_Details
     type: io.kestra.plugin.core.http.Request
