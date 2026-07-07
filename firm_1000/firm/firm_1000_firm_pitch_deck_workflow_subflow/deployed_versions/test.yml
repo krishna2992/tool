@@ -1,7 +1,7 @@
 id: 1000_pitch_deck_workflow_subflow
 namespace: firm_64899.firm
 description: |-
-  {"createdAt": "2026-07-07T07:06:27.168020Z", "updatedAt": "2026-07-07T07:06:27.168020Z", "description": "Automatically evaluates pitch decks to assess opportunities. If the opportunity crosses the predefined threshold, an external project is triggered and sent to the manager for further review and action."}
+  {"createdAt": "2026-03-13T08:09:13.363Z", "updatedAt": "2026-07-07T07:21:53.123022Z", "description": "Automatically evaluates pitch decks to assess opportunities. If the opportunity crosses the predefined threshold, an external project is triggered and sent to the manager for further review and action."}
 
 errors:
 - id: send_slack_message_tofirm
@@ -76,7 +76,7 @@ tasks:
     uri: '{{envs.dv_apihost}}/api/firms/{{inputs.manager_id}}/profile'
     headers:
       Authorization: Bearer {{outputs.get_token.token}}
-      page-url: /app/home
+      page-url: /app/home/game
 
 
   - id: Get_Internal_Project_Template
