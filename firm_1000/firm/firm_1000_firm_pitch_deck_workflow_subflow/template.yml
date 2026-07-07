@@ -22,7 +22,6 @@ errors:
 labels:
   dv_triggerType: Pitch Deck Submitted
   dv_name: Pitch Deck Assessment
-  dv_trigger: Manual
   category: Pitch Deck Review
 
 variables:
