@@ -31,6 +31,7 @@ variables:
   notificationContact: 96359
   threshold: 1.5
   salesforceHost: https://orgfarm-8adaed7eaf-dev-ed.develop.my.salesforce.com
+  firmId: 68708
 
 inputs:
 - id: manager_id
@@ -607,7 +608,7 @@ tasks:
   - id: Get_Salesforce_Credentials_Second
     type: io.kestra.plugin.core.kv.Get
     key: SALES_FORCE_CLIENT_CREDS
-    namespace: firm_68708.firm
+    namespace: firm_{{vars.firmId}}.firm
 
   - id: Get_Salesforce_Access_Token_Second
     type: io.kestra.plugin.scripts.python.Script
@@ -752,7 +753,7 @@ tasks:
   type: io.kestra.plugin.microsoft365.teams.TeamsIncomingWebhook
   description: |
     Send a microsoft teams notification regarding the external project sent to the manager
-  url: "{{ kv('TEAMS_WEBHOOK_SECRET', namespace='firm_68708.firm') }}"
+  url: "{{ kv('TEAMS_WEBHOOK_SECRET', namespace='firm_'~vars.firmId~'.firm') }}"
   payload: |
     {
       "type": "message",
