@@ -746,8 +746,8 @@ tasks:
     displayname: Update Relationship Status
     ui_outputs:
       Manager: '{{outputs.Get_Manager_Firm_Details.body| jq(".name")|first}}'
-      DV Status: Under Review
-      Salesforce Status: Under Review
+      DV Status: Under Review (Risk Review)
+      Salesforce Status: Under Review (Risk Review)
 
 
 - id: Send_Notification_On_Teams
