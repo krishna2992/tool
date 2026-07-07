@@ -80,7 +80,7 @@ tasks:
     uri: '{{envs.dv_apihost}}/api/firms/{{inputs.manager_id}}/profile'
     headers:
       Authorization: Bearer {{outputs.get_token.token}}
-      page-url: /app/home
+      page-url: /app/home/game
 
 
   - id: Get_Internal_Project_Template
