@@ -32,6 +32,8 @@ variables:
   salesforceHost: https://orgfarm-8adaed7eaf-dev-ed.develop.my.salesforce.com
   hello: world
   firmId: 68708
+  temp: variable
+  key1: value1
 
 
 inputs:
