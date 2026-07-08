@@ -77,6 +77,8 @@ tasks:
     Internal project is created using the Initial manager screening template and used for manager ai evaluation. Responses are auto-filled using the annual investor presentation document
   tasks:
   - id: Get_Manager_Firm_Details
+    description: |
+      Fetches the manager firm details for the given manager id
     type: io.kestra.plugin.core.http.Request
     uri: '{{envs.dv_apihost}}/api/firms/{{inputs.manager_id}}/profile'
     headers:
