@@ -21,7 +21,7 @@ errors:
 
 labels:
   dv_triggerType: Pitch Deck Submitted
-  dv_name: '{prod_firmName} Pitch Deck Assessment'
+  dv_name: Pitch Deck Assessment
   category: Pitch Deck Review
 
 variables:
